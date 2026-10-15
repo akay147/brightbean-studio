@@ -409,6 +409,36 @@ def _composer_media_types(request, post, workspace) -> set[str]:
     return media_types
 
 
+def _adopt_pending_media(request, workspace, post):
+    """Attach session-pending uploads that this page still shows to an existing post.
+
+    An upload or AI image that started before the first autosave created the
+    post is queued in the session, not on the post, and nothing else would
+    attach it once the post exists. Only ids the form submits (the page's
+    ``pending_media_ids`` inputs) and that this session uploaded are adopted.
+    Returns True when anything was attached.
+    """
+    session_key = f"pending_media_{workspace.id}"
+    pending = request.session.get(session_key, [])
+    submitted = set(request.POST.getlist("pending_media_ids"))
+    adopt = [pid for pid in pending if pid in submitted]
+    if not adopt:
+        return False
+
+    position = post.media_attachments.aggregate(models.Max("position"))["position__max"] or 0
+    attached = False
+    for asset in MediaAsset.objects.filter(id__in=adopt, workspace=workspace):
+        position += 1
+        _, created = PostMedia.objects.get_or_create(post=post, media_asset=asset, defaults={"position": position})
+        attached = attached or created
+    remaining = [pid for pid in pending if pid not in adopt]
+    if remaining:
+        request.session[session_key] = remaining
+    else:
+        del request.session[session_key]
+    return attached
+
+
 def _validate_required_media(request, post, workspace, action):
     """Refuse to schedule a post without the media a selected platform needs.
 
@@ -854,8 +884,112 @@ def compose(request, workspace_id, post_id=None):
         "failed_platform_posts": failed_platform_posts,
         "failed_first_comments": failed_first_comments,
         "unsplash_enabled": bool(settings.UNSPLASH_ACCESS_KEY),
+        "ai_composer_enabled": bool(settings.OPENAI_API_KEY) and not post_is_readonly,
+        # New, empty posts open on Chat (when available); anything with content opens the editor.
+        "composer_initial_mode": (
+            "chat" if settings.OPENAI_API_KEY and post is None and not form.initial.get("caption") else "editor"
+        ),
     }
     return render(request, "composer/compose.html", context)
+
+
+def _insight_accounts(workspace, raw_ids):
+    """Connected accounts in this workspace for a list or CSV of account ids."""
+    ids = raw_ids.split(",") if isinstance(raw_ids, str) else raw_ids
+    if not isinstance(ids, list):
+        return []
+    ids = [str(i).strip() for i in ids if _is_valid_uuid(str(i).strip())]
+    if not ids:
+        return []
+    return list(
+        SocialAccount.objects.for_workspace(workspace.id).filter(
+            id__in=ids, connection_status=SocialAccount.ConnectionStatus.CONNECTED
+        )
+    )
+
+
+def _assistant_images(workspace, raw_ids):
+    """Image assets in this workspace for the chat assistant, in the given order."""
+    from apps.composer.ai_composer import MAX_IMAGES
+    from apps.media_library.models import MediaAsset
+
+    if not isinstance(raw_ids, list):
+        return []
+    ids = [str(uuid.UUID(str(i).strip())) for i in raw_ids if _is_valid_uuid(str(i).strip())][:MAX_IMAGES]
+    if not ids:
+        return []
+    by_id = {
+        str(asset.id): asset
+        for asset in MediaAsset.objects.filter(
+            workspace=workspace,
+            id__in=ids,
+            media_type__in=[MediaAsset.MediaType.IMAGE, MediaAsset.MediaType.GIF],
+        )
+    }
+    return [by_id[i] for i in ids if i in by_id]
+
+
+@login_required
+@require_permission("create_posts")
+@require_GET
+def compose_insights(request, workspace_id):
+    """Best times to post and recent engagement for the selected channels."""
+    from apps.composer import posting_insights
+
+    workspace = _get_workspace(request, workspace_id)
+    accounts = _insight_accounts(workspace, request.GET.get("accounts", ""))
+    return JsonResponse(
+        {
+            "best_times": posting_insights.best_times(workspace, accounts),
+            "engagement": posting_insights.engagement_summary(accounts),
+        }
+    )
+
+
+@login_required
+@require_permission("create_posts")
+@require_POST
+def compose_assistant(request, workspace_id):
+    """One chat turn: returns the assistant's reply, the drafted post text and,
+    when the user asked for a visual, an image prompt for ``compose_generate_image``."""
+    from apps.composer import ai_composer, posting_insights
+
+    workspace = _get_workspace(request, workspace_id)
+    if not ai_composer.is_enabled():
+        return JsonResponse(
+            {"error": "The AI assistant is not configured. Add OPENAI_API_KEY to your environment."},
+            status=503,
+        )
+    try:
+        payload = json.loads(request.body or b"{}")
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"error": "Invalid request."}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": "Invalid request."}, status=400)
+
+    try:
+        history = ai_composer.clean_history(payload.get("messages"))
+    except ai_composer.AIComposerError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    accounts = _insight_accounts(workspace, payload.get("selected_accounts") or [])
+    images = ai_composer.image_blocks(_assistant_images(workspace, payload.get("media_asset_ids")))
+    try:
+        turn = ai_composer.draft_post(
+            workspace,
+            accounts,
+            history,
+            caption=str(payload.get("caption") or ""),
+            best_times=posting_insights.best_times(workspace, accounts),
+            engagement=posting_insights.engagement_summary(accounts),
+            images=images,
+        )
+    except ai_composer.AIComposerError as exc:
+        return JsonResponse({"error": str(exc)}, status=502)
+
+    return JsonResponse(
+        {"reply": turn.reply, "caption": turn.caption, "image_prompt": turn.image_prompt, "image_size": turn.image_size}
+    )
 
 
 def _transition_post_children(post, target, *, allow_via_draft=True, only=None):
@@ -1011,6 +1145,10 @@ def save_post(request, workspace_id, post_id=None):
     pinterest_board_error = _validate_pinterest_board_selection(request, post, workspace)
     if pinterest_board_error is not None:
         return pinterest_board_error
+
+    if post_id and _adopt_pending_media(request, workspace, post):
+        # Same as attaching through upload_media: new media needs a fresh review.
+        _revert_approved_to_review(post)
 
     media_error = _validate_required_media(request, post, workspace, action)
     if media_error is not None:
@@ -1412,6 +1550,8 @@ def autosave(request, workspace_id, post_id=None):
                 except MediaAsset.DoesNotExist:
                     continue
             del request.session[session_key]
+    elif _adopt_pending_media(request, workspace, post):
+        _revert_approved_to_review(post)
 
     # Sync platform selections
     selected_ids = _parse_selected_account_ids(request.POST.get("selected_accounts", ""))
@@ -2103,6 +2243,86 @@ def unsplash_import(request, workspace_id, post_id=None):
             "failed": failed,
         }
     )
+
+
+@login_required
+@require_permission("create_posts")
+@require_POST
+def compose_generate_image(request, workspace_id, post_id=None):
+    """Generate an image from a prompt and attach it as media.
+
+    Mirrors unsplash_import: attaches to the post when post_id is given, else
+    queues in the pending-media session, and answers with the thumb HTML.
+    """
+    from django.core.files.base import ContentFile
+
+    from apps.composer import ai_images
+    from apps.media_library.models import MediaAsset
+    from apps.media_library.quotas import StorageQuotaExceededError, enforce_storage_quota
+
+    workspace = _get_workspace(request, workspace_id)
+    if not ai_images.is_enabled():
+        return JsonResponse(
+            {"error": "Image generation is not configured. Add OPENAI_API_KEY to your environment."}, status=503
+        )
+    try:
+        payload = json.loads(request.body or b"{}")
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"error": "Invalid request."}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": "Invalid request."}, status=400)
+
+    prompt = _as_str(payload.get("prompt")).strip()[: ai_images.MAX_PROMPT_LENGTH]
+    size = _as_str(payload.get("size"))
+    if size not in ai_images.SIZES:
+        size = "square"
+    if not prompt:
+        return JsonResponse({"error": "Describe the image you want."}, status=400)
+
+    post = get_object_or_404(Post, id=post_id, workspace=workspace) if post_id else None
+
+    try:
+        content = ai_images.generate_image(prompt, size)
+    except ai_images.AIImageError as exc:
+        return JsonResponse({"error": str(exc)}, status=502)
+
+    try:
+        enforce_storage_quota(workspace.organization, len(content))
+    except StorageQuotaExceededError:
+        return JsonResponse({"error": "Storage quota exceeded. Free up space or upgrade your plan."}, status=413)
+
+    width, height = (int(n) for n in ai_images.SIZES[size].split("x"))
+    filename = f"ai-image-{uuid.uuid4().hex[:8]}.jpg"
+    asset = MediaAsset.objects.create(
+        organization=workspace.organization,
+        workspace=workspace,
+        uploaded_by=request.user,
+        file=ContentFile(content, name=filename),
+        filename=filename,
+        media_type=MediaAsset.MediaType.IMAGE,
+        mime_type="image/jpeg",
+        file_size=len(content),
+        width=width,
+        height=height,
+        source="ai",
+        attribution="Generated with OpenAI",
+        alt_text=prompt[:500],
+    )
+    attachment = _attach_asset_for_composer(request, workspace, asset, post)
+    if post is not None:
+        _revert_approved_to_review(post)
+        html = render_to_string(
+            "composer/partials/media_list.html",
+            {"media_attachments": [attachment], "post": post, "workspace": workspace},
+            request=request,
+        )
+    else:
+        html = render_to_string(
+            "composer/partials/media_list_pending.html",
+            {"pending_assets": [asset], "workspace": workspace},
+            request=request,
+        )
+    return JsonResponse({"html": html, "asset": {"id": str(asset.id), "url": asset.file.url}})
 
 
 @login_required
@@ -2820,6 +3040,7 @@ def create_landing(request, workspace_id):
         "builtin_templates": get_all_templates(),
         "template_categories": CATEGORIES,
         "feeds": feeds,
+        "ai_ideas_enabled": bool(settings.OPENAI_API_KEY),
     }
     return render(request, "composer/create_landing.html", context)
 
@@ -3112,6 +3333,53 @@ def idea_delete(request, workspace_id, idea_id):
         status=204,
         headers={"HX-Trigger": "ideaChanged"},
     )
+
+
+@login_required
+@require_permission("create_posts")
+@require_POST
+def idea_generate(request, workspace_id):
+    """Create a batch of AI-suggested ideas in the chosen (or first) column."""
+    from apps.composer import ai_ideas
+
+    workspace = _get_workspace(request, workspace_id)
+    if not ai_ideas.is_enabled():
+        return JsonResponse(
+            {"error": "AI ideas are not configured. Add OPENAI_API_KEY to your environment."},
+            status=503,
+        )
+
+    topic = request.POST.get("topic", "").strip()[: ai_ideas.MAX_TOPIC_LENGTH]
+    group_id = request.POST.get("group")
+    group = IdeaGroup.objects.filter(id=group_id, workspace=workspace).first() if group_id else None
+    if group is None:
+        group = IdeaGroup.objects.for_workspace(workspace.id).order_by("position").first()
+
+    existing_titles = list(
+        Idea.objects.for_workspace(workspace.id).order_by("-created_at").values_list("title", flat=True)[:50]
+    )
+    try:
+        generated = ai_ideas.generate_ideas(workspace, topic, existing_titles)
+    except ai_ideas.AIIdeasError as exc:
+        return JsonResponse({"error": str(exc)}, status=502)
+
+    all_tags = []
+    with transaction.atomic():
+        for item in generated:
+            tags = parse_and_truncate_tag_string(",".join(item.tags))
+            all_tags.extend(tags)
+            Idea.objects.create(
+                workspace=workspace,
+                author=request.user,
+                title=item.title.strip()[:255],
+                description=item.description.strip(),
+                tags=tags,
+                group=group,
+                status=Idea.Status.UNASSIGNED,
+            )
+    _sync_tags_to_model(workspace, list(dict.fromkeys(all_tags)))
+
+    return JsonResponse({"ok": True, "count": len(generated)})
 
 
 @login_required

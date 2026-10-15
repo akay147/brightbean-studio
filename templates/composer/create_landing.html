@@ -398,13 +398,26 @@
     <div class="w-full min-h-[60px] inline-flex flex-row justify-between items-center px-6 pt-6 pb-0 mb-6">
         <h1 class="text-2xl font-semibold text-stone-900" style="letter-spacing: -0.01em;">Create</h1>
 
-        <!-- + New Idea -->
-        <button x-show="activeTab === 'ideas'" x-cloak
-                @click="showCreateModal = true; createSelectedGroup = _defaultGroupId"
-                class="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-semibold text-orange-600 bg-orange-50 border border-orange-200 rounded-full hover:bg-orange-100 hover:border-orange-300 active:bg-orange-100 transition-all duration-150 cursor-pointer">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-            New Idea
-        </button>        
+        <div class="inline-flex items-center gap-2">
+            {% if ai_ideas_enabled %}
+            <!-- Generate ideas with AI -->
+            <button x-show="activeTab === 'ideas'" x-cloak
+                    @click="openGenerateModal()"
+                    title="Generate ideas with AI"
+                    class="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-semibold text-stone-700 bg-white border border-stone-200 rounded-full hover:bg-stone-50 hover:border-stone-300 transition-all duration-150 cursor-pointer">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
+                Generate with AI
+            </button>
+            {% endif %}
+
+            <!-- + New Idea -->
+            <button x-show="activeTab === 'ideas'" x-cloak
+                    @click="showCreateModal = true; createSelectedGroup = _defaultGroupId"
+                    class="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-semibold text-orange-600 bg-orange-50 border border-orange-200 rounded-full hover:bg-orange-100 hover:border-orange-300 active:bg-orange-100 transition-all duration-150 cursor-pointer">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                New Idea
+            </button>
+        </div>
     </div>
 
     <!-- Toolbar -->
@@ -559,6 +572,42 @@
             </div>
         </div>
     </div>
+
+    {% if ai_ideas_enabled %}
+    <!-- Generate Ideas Modal -->
+    <div x-show="showGenerateModal" x-cloak
+         class="idea-modal-overlay"
+         @click.self="closeGenerateModal()"
+         @keydown.escape.window="closeGenerateModal()">
+        <div class="idea-modal" @click.stop>
+            <button type="button" class="idea-modal-close" @click="closeGenerateModal()" title="Close">
+                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+            <form action="{% url 'composer:idea_generate' workspace_id=workspace.id %}"
+                  method="post"
+                  @submit.prevent="submitGenerateIdeas($event)">
+                {% csrf_token %}
+                <input type="hidden" name="group" :value="_defaultGroupId">
+                <div class="idea-modal-header">
+                    <h2 class="text-lg font-semibold" style="color: var(--text-primary);">Generate ideas with AI</h2>
+                </div>
+                <div class="idea-modal-body">
+                    <textarea name="topic" x-ref="generateTopicInput" rows="3" maxlength="500"
+                              class="idea-desc-input"
+                              placeholder="Topic or focus (optional), e.g. &quot;spring product launch&quot; or &quot;behind-the-scenes for our bakery&quot;"></textarea>
+                    <p class="text-xs text-stone-500 mt-2">AI suggests 5 ideas and adds them to your first column.</p>
+                </div>
+                <div class="idea-modal-footer">
+                    <button type="submit" :disabled="isGenerating"
+                            class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-orange-500 rounded-lg hover:bg-orange-600 disabled:opacity-60 disabled:cursor-wait cursor-pointer">
+                        <span x-show="isGenerating" class="animate-spin w-4 h-4 border-2 border-white/40 border-t-white rounded-full"></span>
+                        <span x-text="isGenerating ? 'Generating…' : 'Generate ideas'"></span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Create Idea Modal -->
     <div x-show="showCreateModal" x-cloak
@@ -1139,6 +1188,8 @@ function kanbanBoard() {
         activeTag: '{{ active_tag|default_if_none:""|escapejs }}',
         showCreateModal: false,
         showExploreModal: false,
+        showGenerateModal: false,
+        isGenerating: false,
         createGroupId: '',
         createSelectedGroup: '',
         createSelectedTags: [],
@@ -1616,6 +1667,37 @@ function kanbanBoard() {
                     if (!root) return;
                     root.innerHTML = html;
                     this._refreshColumnMeta();
+                });
+        },
+
+        openGenerateModal() {
+            this.showGenerateModal = true;
+            this.$nextTick(() => {
+                if (this.$refs.generateTopicInput) this.$refs.generateTopicInput.focus();
+            });
+        },
+
+        closeGenerateModal() {
+            if (this.isGenerating) return;
+            this.showGenerateModal = false;
+        },
+
+        submitGenerateIdeas(event) {
+            if (this.isGenerating) return;
+            var formEl = event.target;
+            this.isGenerating = true;
+            this._submitIdeaMutation(formEl)
+                .then(() => this.refreshBoardHard())
+                .then(() => {
+                    formEl.reset();
+                    this.isGenerating = false;
+                    this.closeGenerateModal();
+                })
+                .catch((error) => {
+                    window.alert(error && error.message ? error.message : 'Could not generate ideas. Please try again.');
+                })
+                .finally(() => {
+                    this.isGenerating = false;
                 });
         },
 

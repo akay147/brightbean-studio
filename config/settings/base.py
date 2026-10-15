@@ -289,6 +289,16 @@ GOOGLE_AUTH_CLIENT_SECRET = env("GOOGLE_AUTH_CLIENT_SECRET", default="")
 # Unsplash stock-photo search in the composer (optional; empty disables the feature)
 UNSPLASH_ACCESS_KEY = env("UNSPLASH_ACCESS_KEY", default="")
 
+# OpenAI: Ideas board suggestions, the composer's chat assistant and image
+# generation (optional; empty disables all three)
+OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
+OPENAI_IDEAS_MODEL = env("OPENAI_IDEAS_MODEL", default="gpt-5.4-mini")
+# Drafts benefit from the stronger model
+OPENAI_COMPOSER_MODEL = env("OPENAI_COMPOSER_MODEL", default="gpt-5.5")
+OPENAI_IMAGE_MODEL = env("OPENAI_IMAGE_MODEL", default="gpt-image-2")
+# AI post reviews on the Analytics page (uses web search)
+OPENAI_ANALYTICS_MODEL = env("OPENAI_ANALYTICS_MODEL", default="gpt-5.5")
+
 SOCIALACCOUNT_PROVIDERS = {
     "google": {
         "APP": {

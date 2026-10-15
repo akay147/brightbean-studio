@@ -754,3 +754,80 @@ class TikTokComposerDefaultsTests(AccountScopeTestsBase):
         self.assertIn("ttAllowComment: platformExtras[accId]?.disable_comment === false", html)
         self.assertIn("ttAllowDuet: platformExtras[accId]?.disable_duet === false", html)
         self.assertIn("ttAllowStitch: platformExtras[accId]?.disable_stitch === false", html)
+
+
+class PendingMediaAdoptionTests(AccountScopeTestsBase):
+    """An upload or AI image that finished after the first autosave created the
+    post is still queued in the session; saving the post must attach it."""
+
+    def setUp(self):
+        super().setUp()
+        self.instagram = SocialAccount.objects.create(
+            workspace=self.workspace,
+            platform="instagram",
+            account_platform_id="ig-1",
+            account_name="Instagram",
+            connection_status=SocialAccount.ConnectionStatus.CONNECTED,
+        )
+        self.ig_post = Post.objects.create(workspace=self.workspace, author=self.user, caption="pyramids")
+        self.ig_save_url = reverse(
+            "composer:save_post_edit", kwargs={"workspace_id": self.workspace.id, "post_id": self.ig_post.id}
+        )
+        self.ig_autosave_url = reverse(
+            "composer:autosave_edit", kwargs={"workspace_id": self.workspace.id, "post_id": self.ig_post.id}
+        )
+
+    def _queue_pending(self, *assets):
+        session = self.client.session
+        session[f"pending_media_{self.workspace.id}"] = [str(a.id) for a in assets]
+        session.save()
+
+    def _ig_payload(self, pending_ids=(), **overrides):
+        payload = {
+            "action": "publish_now",
+            "title": "",
+            "caption": "How were the pyramids built?",
+            "tags": "",
+            "selected_accounts": str(self.instagram.id),
+            "pending_media_ids": [str(i) for i in pending_ids],
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_publishing_attaches_a_pending_image_the_page_still_shows(self):
+        image = self._attach(MediaAsset.MediaType.IMAGE, "ai-image.jpg")
+        self._queue_pending(image)
+
+        response = self.client.post(self.ig_save_url, data=self._ig_payload([image.id]))
+
+        self.assertIn(response.status_code, (200, 204, 302))
+        self.assertEqual(list(self.ig_post.media_attachments.values_list("media_asset_id", flat=True)), [image.id])
+        self.assertNotIn(f"pending_media_{self.workspace.id}", self.client.session)
+
+    def test_pending_media_the_page_no_longer_shows_is_left_alone(self):
+        shown = self._attach(MediaAsset.MediaType.IMAGE, "shown.jpg")
+        other = self._attach(MediaAsset.MediaType.IMAGE, "other-tab.jpg")
+        self._queue_pending(shown, other)
+
+        self.client.post(self.ig_save_url, data=self._ig_payload([shown.id]))
+
+        self.assertEqual(list(self.ig_post.media_attachments.values_list("media_asset_id", flat=True)), [shown.id])
+        self.assertEqual(self.client.session[f"pending_media_{self.workspace.id}"], [str(other.id)])
+
+    def test_submitted_ids_this_session_did_not_upload_are_ignored(self):
+        foreign = self._attach(MediaAsset.MediaType.IMAGE, "foreign.jpg")
+
+        response = self.client.post(self.ig_save_url, data=self._ig_payload([foreign.id]))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Instagram", response.json()["errors"]["media"])
+        self.assertFalse(self.ig_post.media_attachments.exists())
+
+    def test_autosave_attaches_pending_media_to_the_existing_post(self):
+        image = self._attach(MediaAsset.MediaType.IMAGE, "ai-image.jpg")
+        self._queue_pending(image)
+
+        response = self.client.post(self.ig_autosave_url, data=self._ig_payload([image.id], action="save_draft"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(self.ig_post.media_attachments.filter(media_asset=image).exists())

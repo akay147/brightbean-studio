@@ -78,6 +78,23 @@
             if (e.target.closest('[data-action="close-drawer"]')) {
                 if (window.Alpine) window.Alpine.$data(shell).drawerOpen = false;
             }
+
+            const reviewBtn = e.target.closest('[data-action="ai-review"]');
+            if (reviewBtn && !reviewBtn.disabled) {
+                const host = document.getElementById('ai-review-host');
+                reviewBtn.disabled = true;
+                reviewBtn.textContent = 'Analyzing… this can take up to 2 minutes';
+                fetch(reviewBtn.dataset.url, {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': reviewBtn.dataset.csrf, 'HX-Request': 'true' },
+                })
+                    .then(r => r.text())
+                    .then(html => { if (host) host.innerHTML = html; })
+                    .catch(() => {
+                        reviewBtn.disabled = false;
+                        reviewBtn.textContent = 'Analysis failed. Try again';
+                    });
+            }
         });
     </script>
 </div>

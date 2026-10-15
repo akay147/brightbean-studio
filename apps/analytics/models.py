@@ -113,3 +113,51 @@ class ProviderQuotaBlock(models.Model):
     def __str__(self) -> str:
         scope = f"/{self.quota_scope}" if self.quota_scope else ""
         return f"{self.platform}{scope} blocked until {self.blocked_until:%Y-%m-%d %H:%M}"
+
+
+class PostAIReview(models.Model):
+    """The latest AI review of one published post (why it performed as it did).
+
+    ``result`` holds the structured review from ``apps.analytics.ai_review``.
+    Re-analyzing overwrites it; the lessons it produced are folded into the
+    workspace's :class:`ContentPlaybook`.
+    """
+
+    platform_post = models.OneToOneField(
+        "composer.PlatformPost",
+        on_delete=models.CASCADE,
+        related_name="ai_review",
+    )
+    result = models.JSONField(default=dict)
+    model = models.CharField(max_length=100, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "analytics_post_ai_review"
+
+    def __str__(self) -> str:
+        return f"AI review · {self.platform_post_id}"
+
+
+class ContentPlaybook(models.Model):
+    """What the AI has learned about a workspace's content from post reviews.
+
+    A short list of lessons, re-distilled after every review and fed to the
+    composer's chat assistant and the Ideas generator.
+    """
+
+    workspace = models.OneToOneField(
+        "workspaces.Workspace",
+        on_delete=models.CASCADE,
+        related_name="content_playbook",
+    )
+    lessons = models.JSONField(default=list, blank=True)
+    review_count = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "analytics_content_playbook"
+
+    def __str__(self) -> str:
+        return f"Playbook · {self.workspace_id}"

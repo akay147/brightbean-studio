@@ -10,6 +10,7 @@ urlpatterns = [
     # Idea CRUD (HTMX endpoints)
     path("ideas/upload-media/", views.idea_upload_media, name="idea_upload_media"),
     path("ideas/create/", views.idea_create, name="idea_create"),
+    path("ideas/generate/", views.idea_generate, name="idea_generate"),
     path("ideas/<uuid:idea_id>/create-post/", views.idea_create_post, name="idea_create_post"),
     path("ideas/<uuid:idea_id>/edit/", views.idea_edit, name="idea_edit"),
     path("ideas/<uuid:idea_id>/delete/", views.idea_delete, name="idea_delete"),
@@ -34,6 +35,9 @@ urlpatterns = [
     # Auto-save
     path("compose/autosave/", views.autosave, name="autosave"),
     path("compose/<uuid:post_id>/autosave/", views.autosave, name="autosave_edit"),
+    # Chat assistant + posting insights
+    path("compose/assistant/", views.compose_assistant, name="compose_assistant"),
+    path("compose/insights/", views.compose_insights, name="compose_insights"),
     # Live preview
     path("compose/preview/", views.preview, name="preview"),
     # Media
@@ -45,6 +49,8 @@ urlpatterns = [
     path("compose/unsplash-search/", views.unsplash_search, name="unsplash_search"),
     path("compose/unsplash-import/", views.unsplash_import, name="unsplash_import"),
     path("compose/<uuid:post_id>/unsplash-import/", views.unsplash_import, name="unsplash_import_post"),
+    path("compose/generate-image/", views.compose_generate_image, name="generate_image"),
+    path("compose/<uuid:post_id>/generate-image/", views.compose_generate_image, name="generate_image_post"),
     path("compose/pinterest-boards/<uuid:account_id>/", views.pinterest_boards, name="pinterest_boards"),
     path("compose/tiktok-creator-info/<uuid:account_id>/", views.tiktok_creator_info, name="tiktok_creator_info"),
     path("compose/<uuid:post_id>/media-picker/", views.media_picker, name="media_picker_post"),
