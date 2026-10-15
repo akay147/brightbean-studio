@@ -1,0 +1,187 @@
+<!-- Chat with the AI assistant. Drafts land in the editor's caption, so the
+     live preview, Save Draft and the publish split-button all work unchanged. -->
+<div x-show="composerMode === 'chat'" x-cloak class="flex flex-col gap-4">
+
+    <!-- Insights: best time to post + recent engagement for the selected channels -->
+    <div class="bg-white rounded-xl border border-stone-200 p-4">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="text-xs font-semibold text-stone-500 uppercase tracking-wider">Best time to post</h3>
+            <span class="text-[11px] text-stone-400" x-show="insights" x-text="insights ? insights.best_times.timezone : ''"></span>
+        </div>
+        <template x-if="insightsLoading && !insights">
+            <p class="text-xs text-stone-400">Loading suggestions…</p>
+        </template>
+        <template x-if="insights">
+            <div>
+                <div class="flex flex-wrap gap-2">
+                    <template x-for="slot in insights.best_times.slots" :key="slot.date + slot.time">
+                        <button type="button" @click="scheduleAtSlot(slot)" :title="slot.reason"
+                                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-violet-700 bg-violet-50 border border-violet-100 rounded-full hover:bg-violet-100 hover:border-violet-200 transition-colors cursor-pointer">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                            <span x-text="slot.label"></span>
+                        </button>
+                    </template>
+                </div>
+                <p class="text-[11px] text-stone-400 mt-2"
+                   x-text="insights.best_times.source === 'history'
+                        ? 'Based on engagement of your last ' + insights.best_times.sample_size + ' published posts. Click a time to schedule.'
+                        : 'General platform benchmarks until you have more published posts with analytics. Click a time to schedule.'"></p>
+
+                <div class="mt-4 pt-3 border-t border-stone-100">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xs font-semibold text-stone-500 uppercase tracking-wider"
+                            x-text="'Engagement · last ' + insights.engagement.days + ' days'"></h3>
+                        <a href="{% url 'analytics:index' workspace_id=workspace.id %}" class="text-[11px] font-medium text-orange-600 hover:text-orange-700">Analytics →</a>
+                    </div>
+                    <template x-if="insights.engagement.measured_posts">
+                        <div>
+                            <div class="grid grid-cols-3 gap-2">
+                                <div class="rounded-lg bg-stone-50 px-3 py-2">
+                                    <div class="text-[11px] text-stone-400">Posts</div>
+                                    <div class="text-sm font-semibold text-stone-800 tabular-nums" x-text="insights.engagement.measured_posts"></div>
+                                </div>
+                                <div class="rounded-lg bg-stone-50 px-3 py-2">
+                                    <div class="text-[11px] text-stone-400">Avg engagements</div>
+                                    <div class="text-sm font-semibold text-stone-800 tabular-nums" x-text="insights.engagement.avg_engagements"></div>
+                                </div>
+                                <div class="rounded-lg bg-stone-50 px-3 py-2">
+                                    <div class="text-[11px] text-stone-400">Engagement rate</div>
+                                    <div class="text-sm font-semibold text-stone-800 tabular-nums"
+                                         x-text="insights.engagement.avg_engagement_rate !== null ? insights.engagement.avg_engagement_rate + '%' : '—'"></div>
+                                </div>
+                            </div>
+                            <template x-if="insights.engagement.top_post">
+                                <p class="text-xs text-stone-500 mt-2 line-clamp-2">
+                                    <span class="font-semibold text-stone-600">Top post</span>
+                                    <span x-text="'(' + insights.engagement.top_post.platform + ', ' + insights.engagement.top_post.engagements + ' engagements): '"></span>
+                                    <span x-text="insights.engagement.top_post.caption"></span>
+                                </p>
+                            </template>
+                        </div>
+                    </template>
+                    <template x-if="!insights.engagement.measured_posts">
+                        <p class="text-xs text-stone-400"
+                           x-text="selectedAccounts.length ? 'No published posts with analytics yet for these channels.' : 'Select a channel to see its engagement.'"></p>
+                    </template>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- Conversation -->
+    <!-- Dropped files upload through the editor's media row, so they attach to the post. -->
+    <div class="bg-white rounded-xl border flex flex-col transition-colors"
+         :class="chatDragover ? 'border-orange-300 bg-orange-50/30' : 'border-stone-200'"
+         @dragover.prevent="chatDragover = true"
+         @dragleave.self="chatDragover = false"
+         @drop.prevent="chatDragover = false; attachChatFiles($event.dataTransfer.files)">
+        <div x-ref="chatScroll" class="flex-1 min-h-[240px] max-h-[50vh] overflow-y-auto p-4 space-y-4 panel-scroll">
+            <template x-for="(msg, idx) in chatMessages" :key="idx">
+                <div class="flex gap-3" :class="msg.role === 'user' ? 'justify-end' : ''">
+                    <template x-if="msg.role === 'assistant'">
+                        <div class="w-7 h-7 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center flex-shrink-0">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
+                        </div>
+                    </template>
+                    <div class="max-w-[85%] space-y-2">
+                        <template x-if="msg.images && msg.images.length">
+                            <div class="flex flex-wrap justify-end gap-1.5">
+                                <template x-for="src in msg.images" :key="src">
+                                    <img :src="src" alt="" class="w-14 h-14 rounded-lg object-cover border border-stone-200">
+                                </template>
+                            </div>
+                        </template>
+                        <div class="px-4 py-2.5 rounded-2xl text-sm whitespace-pre-line"
+                             :class="msg.role === 'user' ? 'bg-stone-800 text-white rounded-br-md' : 'bg-stone-100 text-stone-800 rounded-tl-md'"
+                             x-text="msg.content"></div>
+                        <template x-if="msg.caption">
+                            <div class="border border-orange-200 bg-orange-50/50 rounded-xl p-3">
+                                <div class="flex items-center justify-between mb-1.5">
+                                    <span class="text-[11px] font-semibold text-orange-700 uppercase tracking-wider">Draft</span>
+                                    <button type="button" @click="applyDraft(msg.caption)"
+                                            x-show="caption !== msg.caption"
+                                            class="text-[11px] font-semibold text-orange-600 hover:text-orange-700 cursor-pointer">Use this version</button>
+                                    <span x-show="caption === msg.caption" class="text-[11px] text-stone-400">In editor</span>
+                                </div>
+                                <p class="text-sm text-stone-700 whitespace-pre-line" x-text="msg.caption"></p>
+                            </div>
+                        </template>
+                        <!-- Image the assistant asked the generator for; it lands in the post's media -->
+                        <template x-if="msg.imagePrompt">
+                            <div class="border border-violet-200 bg-violet-50/40 rounded-xl p-3 space-y-2">
+                                <div class="flex items-center justify-between gap-2">
+                                    <span class="text-[11px] font-semibold text-violet-700 uppercase tracking-wider">Image</span>
+                                    <span x-show="msg.imageStatus === 'done'" class="text-[11px] text-stone-400">Attached to post</span>
+                                    <button type="button" x-show="msg.imageStatus === 'error' || msg.imageStatus === 'done'"
+                                            @click="runChatImage(msg)"
+                                            class="text-[11px] font-semibold text-violet-600 hover:text-violet-700 cursor-pointer"
+                                            x-text="msg.imageStatus === 'error' ? 'Retry' : 'Another version'"></button>
+                                </div>
+                                <template x-if="msg.imageStatus === 'generating'">
+                                    <div class="w-40 h-40 rounded-lg bg-violet-100/70 animate-pulse flex items-center justify-center text-xs text-violet-500">Creating image…</div>
+                                </template>
+                                <template x-if="msg.imageUrl && msg.imageStatus === 'done'">
+                                    <img :src="msg.imageUrl" alt="" class="w-40 rounded-lg border border-violet-100">
+                                </template>
+                                <p x-show="msg.imageStatus === 'error'" class="text-xs text-red-500" x-text="msg.imageError"></p>
+                                <p class="text-[11px] text-stone-400 line-clamp-2" :title="msg.imagePrompt" x-text="msg.imagePrompt"></p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+            <div x-show="chatSending" class="flex gap-3">
+                <div class="w-7 h-7 rounded-full bg-orange-100 flex-shrink-0"></div>
+                <div class="px-4 py-2.5 rounded-2xl rounded-tl-md bg-stone-100 text-sm text-stone-400">Drafting…</div>
+            </div>
+        </div>
+
+        <p x-show="chatError" x-cloak x-text="chatError" class="px-4 pb-2 text-xs text-red-500"></p>
+
+        <!-- The post's media (same items as the editor's media row). Images are sent to the assistant with each message. -->
+        <div x-show="chatMedia.length || isUploading" x-cloak class="flex flex-wrap items-center gap-2 px-3 pt-3 border-t border-stone-100">
+            <template x-for="(item, idx) in chatMedia" :key="item.key">
+                <div class="relative w-14 h-14 rounded-lg overflow-hidden border border-stone-200 bg-stone-100 group">
+                    <template x-if="item.isVideo">
+                        <video :src="item.src" class="w-full h-full object-cover" muted preload="metadata"></video>
+                    </template>
+                    <template x-if="!item.isVideo">
+                        <img :src="item.src" alt="" class="w-full h-full object-cover">
+                    </template>
+                    <div x-show="!item.id" class="absolute inset-0 bg-white/60 flex items-center justify-center text-[10px] text-stone-500">…</div>
+                    <button type="button" x-show="item.id" @click="removeChatMedia(idx)" title="Remove from post"
+                            class="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer">
+                        <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+            </template>
+            <span class="text-[11px] text-stone-400"
+                  x-text="isUploading ? 'Uploading…'
+                        : chatMedia.some(m => m.isVideo) ? 'Attached to the post. The assistant reads images, not video.'
+                        : chatMedia.length > 1 ? chatMedia.length + ' images attached. Instagram publishes them as one carousel post (up to 10).'
+                        : 'Attached to the post. Add more images to make an Instagram carousel.'"></span>
+        </div>
+
+        <!-- No name attribute: the chat box must never be submitted with the post form. -->
+        <div class="flex items-end gap-2 p-3 border-t border-stone-100">
+            <!-- The chat's own picker: the editor's input lives in a nested x-data scope, so its x-ref isn't reachable from here. -->
+            <input type="file" x-ref="chatFileInput" class="hidden" multiple accept="image/*,video/*"
+                   @change="attachChatFiles($event.target.files); $event.target.value = ''">
+            <button type="button" @click="$refs.chatFileInput.click()" title="Attach images from your device (up to 10)"
+                    class="w-9 h-9 rounded-lg text-stone-400 hover:text-orange-600 hover:bg-stone-50 flex items-center justify-center cursor-pointer flex-shrink-0">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"/></svg>
+            </button>
+            <textarea x-model="chatInput" x-ref="chatInput" rows="1"
+                      @paste="handleChatPaste($event)"
+                      @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); sendChat(); }"
+                      :disabled="chatSending"
+                      class="flex-1 resize-none text-sm px-3 py-2 rounded-lg border border-stone-200 outline-none focus:border-orange-300 max-h-40"
+                      placeholder="Ask the agent to draft, revise or create an image…"></textarea>
+            <button type="button" @click="sendChat()" :disabled="chatSending || isUploading || !chatInput.trim()"
+                    :title="isUploading ? 'Waiting for uploads to finish' : 'Send'"
+                    class="w-9 h-9 rounded-lg bg-orange-500 text-white flex items-center justify-center hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex-shrink-0">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg>
+            </button>
+        </div>
+    </div>
+</div>

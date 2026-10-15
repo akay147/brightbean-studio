@@ -1243,3 +1243,37 @@ class TestTheQuotaStormEndToEnd:
         assert all(p.analytics_failure_count == 0 for p in posts)
         assert all(p.analytics_attempted_at is None for p in posts)
         assert all(_post_cadence_due(p, platform="youtube") for p in posts)
+
+
+class TestInsufficientScopeClassification:
+    """Meta errors are classified by code, not by the wording of the message."""
+
+    @staticmethod
+    def _meta_error(code, message):
+        return APIError(
+            f"Instagram (Direct) API error 400: {message}",
+            status_code=400,
+            raw_response={"error": {"message": message, "code": code}},
+        )
+
+    def test_deleted_post_is_not_a_scope_problem(self):
+        from apps.analytics.tasks import _is_insufficient_scope
+
+        exc = self._meta_error(
+            100,
+            "Unsupported get request. Object with ID '1' does not exist, cannot be loaded due to "
+            "missing permissions, or does not support this operation",
+        )
+        assert not _is_insufficient_scope(exc)
+
+    @pytest.mark.parametrize("code", [10, 200, 230])
+    def test_meta_permission_codes_are(self, code):
+        from apps.analytics.tasks import _is_insufficient_scope
+
+        assert _is_insufficient_scope(self._meta_error(code, "(#10) Application does not have permission"))
+
+    def test_errors_without_a_meta_body_still_use_the_message(self):
+        from apps.analytics.tasks import _is_insufficient_scope
+
+        assert _is_insufficient_scope(APIError("403 insufficient scope", status_code=403))
+        assert not _is_insufficient_scope(APIError("502 bad gateway", status_code=502))

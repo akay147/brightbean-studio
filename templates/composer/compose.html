@@ -326,6 +326,18 @@
 
             <div class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 sm:space-y-5 panel-scroll relative" style="z-index: 0;">
 
+                {% if ai_composer_enabled %}
+                <!-- Chat / Editor toggle -->
+                <div class="inline-flex p-1 bg-stone-100 rounded-lg">
+                    <button type="button" @click="setComposerMode('chat')"
+                            :class="composerMode === 'chat' ? 'bg-stone-900 text-white shadow-sm' : 'text-stone-500 hover:text-stone-700'"
+                            class="px-4 py-1.5 text-sm font-semibold rounded-md transition-colors cursor-pointer">Chat</button>
+                    <button type="button" @click="setComposerMode('editor')"
+                            :class="composerMode === 'editor' ? 'bg-stone-900 text-white shadow-sm' : 'text-stone-500 hover:text-stone-700'"
+                            class="px-4 py-1.5 text-sm font-semibold rounded-md transition-colors cursor-pointer">Editor</button>
+                </div>
+                {% endif %}
+
                 <!-- Platform account pills -->
                 <div class="flex items-center gap-2 flex-wrap">
                     {% for account in social_accounts %}
@@ -353,6 +365,13 @@
                     <span class="text-xs text-stone-400">No accounts connected</span>
                     {% endfor %}
                 </div>
+
+                {% if ai_composer_enabled %}
+                {% include "composer/partials/chat_panel.html" %}
+                {% endif %}
+
+                <!-- Editor: hidden (not removed) in Chat mode so every field still submits -->
+                <div x-show="composerMode === 'editor'" class="space-y-4 sm:space-y-5">
 
                 {% if failed_platform_posts %}
                 <!-- Publish failures: show the stored error so the user knows what to fix before retrying -->
@@ -536,6 +555,12 @@
                             <button type="button" class="media-unsplash-btn" title="Search Unsplash"
                                     @click="openUnsplashModal()">
                                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7.5 6.75V0h9v6.75h-9zm9 3.75H24V24H0V10.5h7.5v6.75h9V10.5z"/></svg>
+                            </button>
+                            {% endif %}
+                            {% if ai_composer_enabled %}
+                            <button type="button" class="media-unsplash-btn" title="Generate an image with AI"
+                                    @click="openImageGenModal()">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
                             </button>
                             {% endif %}
                             <!-- display:contents keeps appended thumbs flowing in this row -->
@@ -1382,6 +1407,7 @@
                               rows="2">{{ form.internal_notes.value|default:"" }}</textarea>
                 </div>
                 {% endif %}
+                </div><!-- /editor -->
             </div>
 
             <!-- ── Action Bar ─────────────────────────────────────── -->
@@ -1531,6 +1557,17 @@
                                     <div class="text-xs text-stone-400 flex items-center gap-1">
                                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                         Timezone: {{ workspace.effective_timezone }}
+                                    </div>
+                                    <!-- Best-time suggestions (same data as the Chat tab's insights card) -->
+                                    <div x-show="insights && insights.best_times.slots.length" x-cloak>
+                                        <label class="block text-xs font-medium text-stone-500 mb-1">Suggested times</label>
+                                        <div class="flex flex-wrap gap-1.5">
+                                            <template x-for="slot in (insights ? insights.best_times.slots : [])" :key="slot.date + slot.time">
+                                                <button type="button" @click.stop="scheduleAtSlot(slot)" :title="slot.reason"
+                                                        class="px-2 py-1 text-[11px] font-semibold text-violet-700 bg-violet-50 rounded-md hover:bg-violet-100 cursor-pointer"
+                                                        x-text="slot.label"></button>
+                                            </template>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -1862,6 +1899,65 @@
     {% endif %}
 
     <!-- ════════════════════════════════════════════════════════════
+         AI IMAGE MODAL (only rendered when OPENAI_API_KEY is configured)
+         ════════════════════════════════════════════════════════════ -->
+    {% if ai_composer_enabled %}
+    <div x-show="showImageGenModal" x-cloak
+         class="fixed inset-0 z-[60] flex items-center justify-center"
+         @keydown.escape.window="showImageGenModal && !imageGenBusy && (showImageGenModal = false)"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100">
+        <div class="absolute inset-0 bg-stone-900/40 backdrop-blur-sm" @click="!imageGenBusy && (showImageGenModal = false)"></div>
+        <div class="relative bg-white rounded-2xl shadow-xl border border-stone-200 w-[calc(100vw-1rem)] sm:w-[520px] mx-2 sm:mx-0 flex flex-col overflow-hidden">
+            <div class="px-4 sm:px-6 py-4 border-b border-stone-100 flex items-center gap-3">
+                <span class="w-9 h-9 rounded-lg bg-violet-100 text-violet-600 flex items-center justify-center flex-shrink-0">
+                    <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
+                </span>
+                <div class="min-w-0">
+                    <h2 class="text-base font-semibold text-stone-900">Generate an image</h2>
+                    <p class="text-xs text-stone-400 truncate">Describe it and AI creates it &middot; added to this post's media</p>
+                </div>
+                <button type="button" @click="showImageGenModal = false" :disabled="imageGenBusy"
+                        class="ml-auto w-8 h-8 rounded-lg border border-stone-200 text-stone-400 hover:text-stone-600 hover:border-stone-300 flex items-center justify-center cursor-pointer flex-shrink-0 disabled:opacity-50">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="px-4 sm:px-6 py-4 space-y-4">
+                <!-- No name attributes: nothing here may submit with the post form. -->
+                <textarea x-ref="imageGenPrompt" x-model="imageGenPrompt" rows="4" :disabled="imageGenBusy"
+                          @keydown.enter="if ($event.metaKey || $event.ctrlKey) { $event.preventDefault(); submitImageGen(); }"
+                          class="w-full resize-none text-sm px-3 py-2 rounded-lg border border-stone-200 outline-none focus:border-orange-300"
+                          placeholder="e.g. A flat-lay of a latte and croissant on a marble table, morning light, warm tones"></textarea>
+                <div>
+                    <div class="text-xs font-medium text-stone-500 mb-1.5">Shape</div>
+                    <div class="inline-flex p-1 bg-stone-100 rounded-lg">
+                        <template x-for="opt in [['square', 'Square 1:1'], ['landscape', 'Landscape 3:2'], ['portrait', 'Portrait 2:3']]" :key="opt[0]">
+                            <button type="button" @click="imageGenSize = opt[0]" :disabled="imageGenBusy"
+                                    :class="imageGenSize === opt[0] ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'"
+                                    class="px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer" x-text="opt[1]"></button>
+                        </template>
+                    </div>
+                    <p class="text-[11px] text-stone-400 mt-1.5"
+                       x-text="imageGenSize === 'portrait' ? 'Best for Stories, Pinterest and TikTok. Instagram feed posts need square or landscape.' : 'Works for Instagram feed posts and most platforms.'"></p>
+                </div>
+                <p x-show="imageGenError" x-cloak x-text="imageGenError" class="text-xs text-red-500"></p>
+            </div>
+            <div class="px-4 sm:px-6 py-4 border-t border-stone-100 flex items-center gap-3">
+                <span class="text-xs text-stone-400" x-show="imageGenBusy">This can take up to a minute…</span>
+                <div class="ml-auto flex items-center gap-2">
+                    <button type="button" @click="showImageGenModal = false" :disabled="imageGenBusy"
+                            class="px-4 py-2 rounded-lg text-sm font-semibold text-stone-600 hover:text-stone-900 cursor-pointer disabled:opacity-50">Cancel</button>
+                    <button type="button" @click="submitImageGen()" :disabled="imageGenBusy || !imageGenPrompt.trim()"
+                            class="px-5 py-2 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            x-text="imageGenBusy ? 'Generating…' : 'Generate'"></button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ════════════════════════════════════════════════════════════
          FRAME PICKER MODAL (YouTube thumbnail / TikTok cover)
          ════════════════════════════════════════════════════════════ -->
     <div x-show="showFramePicker" x-cloak
@@ -2066,6 +2162,25 @@ function composerApp() {
         autosavedPostId: '{{ post.id|default:"" }}',
         mediaItems: JSON.parse(document.getElementById('composer-media-items').textContent),
 
+        // Chat assistant + posting insights
+        composerMode: '{{ composer_initial_mode }}',
+        chatMessages: [{ role: 'assistant', content: "Tell me what to post about: a topic, an angle, or a rough idea. I'll draft it and keep the Editor in sync. Ask me to create an image, or attach your own photos with the paperclip.", intro: true }],
+        chatInput: '',
+        chatSending: false,
+        chatError: '',
+        chatMedia: [],
+        chatDragover: false,
+
+        // AI image generation (chat + editor modal)
+        showImageGenModal: false,
+        imageGenPrompt: '',
+        imageGenSize: 'square',
+        imageGenBusy: false,
+        imageGenError: '',
+        insights: null,
+        insightsLoading: false,
+        _insightsTimer: null,
+
         // Unsplash search modal
         showUnsplashModal: false,
         unsplashChips: ['Coffee', 'Nature', 'Food', 'City', 'People', 'Minimal', 'Workspace', 'Travel', 'Texture', 'Flowers'],
@@ -2201,6 +2316,13 @@ function composerApp() {
                 if (!this.platformExtras[id]) this.platformExtras[id] = {};
             });
 
+            // Best-time suggestions follow the selected channels.
+            this.loadInsights();
+            this.$watch('selectedAccounts', () => {
+                clearTimeout(this._insightsTimer);
+                this._insightsTimer = setTimeout(() => this.loadInsights(), 300);
+            });
+
             // Listen for thumbnail selection events dispatched from the picker
             this.$root.addEventListener('thumbnail-selected', (e) => {
                 const accId = this.thumbnailPickerAccId;
@@ -2252,6 +2374,16 @@ function composerApp() {
                 this.hasMediaAttached = thumbs.length > 0;
                 this.hasVideoAttached = videoCount > 0;
                 this.hasSingleVideoAttached = thumbs.length === 1 && videoCount === 1;
+                // Mirror for the chat panel. Thumbs still uploading have no asset id yet.
+                this.chatMedia = thumbs
+                    .filter(thumb => !thumb.classList.contains('upload-failed'))
+                    .map((thumb, idx) => {
+                        const el = thumb.querySelector('[data-asset-id]') || thumb.querySelector('img, video');
+                        if (!el) return null;
+                        const id = el.dataset.assetId || '';
+                        return { key: id || 'pending-' + idx, id, src: el.getAttribute('src') || '', isVideo: el.tagName === 'VIDEO' };
+                    })
+                    .filter(Boolean);
             };
             this.$nextTick(syncVideoAttached);
             document.body.addEventListener('previewUpdate', syncVideoAttached);
@@ -2276,6 +2408,190 @@ function composerApp() {
             this.$nextTick(() => {
                 this.triggerPreviewUpdate();
             });
+        },
+
+        setComposerMode(mode) {
+            this.composerMode = mode;
+            if (mode === 'chat') this.$nextTick(() => this.$refs.chatInput && this.$refs.chatInput.focus());
+        },
+
+        loadInsights() {
+            this.insightsLoading = true;
+            const url = '{% url "composer:compose_insights" workspace_id=workspace.id %}?accounts=' + encodeURIComponent(this.selectedAccounts.join(','));
+            fetch(url, { headers: { 'Accept': 'application/json' } })
+                .then(r => r.ok ? r.json() : null)
+                .then(data => { if (data) this.insights = data; })
+                .catch(() => {})
+                .finally(() => { this.insightsLoading = false; });
+        },
+
+        scheduleAtSlot(slot) {
+            if (this.selectedAccounts.length === 0) {
+                this.chatError = 'Select a channel first, then pick a time to schedule.';
+                return;
+            }
+            this.chatError = '';
+            if (window.composerOpenSchedule) window.composerOpenSchedule(slot.date, slot.time);
+        },
+
+        removeChatMedia(idx) {
+            const item = this.chatMedia[idx];
+            if (!item || !item.id) return;
+            const el = document.querySelector('#media-list [data-asset-id="' + item.id + '"]');
+            const btn = el && el.closest('.media-thumb').querySelector('.remove-btn');
+            if (btn) btn.click();
+        },
+
+        runChatImage(msg) {
+            msg.imageStatus = 'generating';
+            msg.imageError = '';
+            this.scrollChatToBottom();
+            this.generateImage(msg.imagePrompt, msg.imageSize)
+                .then(asset => { msg.imageUrl = asset.url; msg.imageStatus = 'done'; })
+                .catch(err => { msg.imageError = err.message; msg.imageStatus = 'error'; })
+                .finally(() => this.scrollChatToBottom());
+        },
+
+        openImageGenModal() {
+            this.imageGenError = '';
+            if (!this.imageGenPrompt && this.caption.trim()) {
+                this.imageGenPrompt = 'An eye-catching photo for this post: ' + this.caption.trim().slice(0, 300);
+            }
+            this.showImageGenModal = true;
+            this.$nextTick(() => this.$refs.imageGenPrompt && this.$refs.imageGenPrompt.focus());
+        },
+
+        submitImageGen() {
+            if (this.imageGenBusy || !this.imageGenPrompt.trim()) return;
+            this.imageGenBusy = true;
+            this.imageGenError = '';
+            this.generateImage(this.imageGenPrompt, this.imageGenSize)
+                .then(() => { this.showImageGenModal = false; this.imageGenPrompt = ''; })
+                .catch(err => { this.imageGenError = err.message; })
+                .finally(() => { this.imageGenBusy = false; });
+        },
+
+        // Generates an image server-side and attaches it like an upload.
+        // Resolves with {id, url}; rejects with a user-facing Error.
+        generateImage(prompt, size) {
+            if (document.querySelector('#media-list video')) {
+                return Promise.reject(new Error('You cannot mix images and video in one post. Remove the video first.'));
+            }
+            const list = document.getElementById('media-list');
+            const placeholder = document.createElement('div');
+            placeholder.className = 'media-thumb';
+            placeholder.innerHTML = '<div class="w-full h-full bg-violet-100 animate-pulse"></div>';
+            list.appendChild(placeholder);
+
+            const url = this.autosavedPostId
+                ? `/workspace/{{ workspace.id }}/compose/${this.autosavedPostId}/generate-image/`
+                : '{% url "composer:generate_image" workspace_id=workspace.id %}';
+            const csrf = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'X-CSRFToken': csrf, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt, size }),
+            })
+                .then(r => r.json().catch(() => ({})).then(data => ({ ok: r.ok, data })))
+                .then(({ ok, data }) => {
+                    if (!ok || !data.html) throw new Error(data.error || 'Image generation failed. Try again.');
+                    placeholder.insertAdjacentHTML('afterend', data.html);
+                    placeholder.remove();
+                    if (window.htmx) window.htmx.process(list);
+                    this._applyYoutubeThumbnail(data.asset.id, data.asset.url);
+                    this.triggerPreviewUpdate();
+                    return data.asset;
+                })
+                .catch(err => {
+                    placeholder.remove();
+                    throw new Error(err.message || 'Image generation failed. Try again.');
+                });
+        },
+
+        handleChatPaste(event) {
+            const files = Array.from((event.clipboardData && event.clipboardData.files) || [])
+                .filter(f => f.type.startsWith('image/'));
+            if (!files.length) return;
+            event.preventDefault();
+            this.attachChatFiles(files);
+        },
+
+        // Instagram carousels hold at most 10 items, so cap what the chat attaches.
+        attachChatFiles(fileList) {
+            const files = Array.from(fileList || []).filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'));
+            if (!files.length) return;
+            const room = 10 - this.chatMedia.length - this.uploadQueue.length - (this.isUploading ? 1 : 0);
+            if (files.length > room) {
+                this.chatError = room > 0
+                    ? `Instagram allows up to 10 images per post. You can add ${room} more.`
+                    : 'Instagram allows up to 10 images per post. Remove one to add another.';
+                return;
+            }
+            this.chatError = '';
+            this.processFiles(files);
+        },
+
+        applyDraft(text) {
+            this.caption = text;
+            this.$nextTick(() => this.triggerPreviewUpdate());
+        },
+
+        scrollChatToBottom() {
+            this.$nextTick(() => {
+                const el = this.$refs.chatScroll;
+                if (el) el.scrollTop = el.scrollHeight;
+            });
+        },
+
+        sendChat() {
+            const text = this.chatInput.trim();
+            if (!text || this.chatSending) return;
+            this.chatError = '';
+            const images = this.chatMedia.filter(m => m.id && !m.isVideo);
+            this.chatMessages.push({ role: 'user', content: text, images: images.map(m => m.src) });
+            this.chatInput = '';
+            this.chatSending = true;
+            this.scrollChatToBottom();
+
+            const history = this.chatMessages
+                .filter(m => !m.intro)
+                .map(m => ({ role: m.role, content: m.content, caption: m.caption || '', image_prompt: m.imagePrompt || '' }));
+            fetch('{% url "composer:compose_assistant" workspace_id=workspace.id %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                },
+                body: JSON.stringify({
+                    messages: history,
+                    caption: this.caption,
+                    selected_accounts: this.selectedAccounts,
+                    media_asset_ids: images.map(m => m.id),
+                }),
+            })
+                .then(r => r.json().catch(() => ({})).then(data => ({ ok: r.ok, data })))
+                .then(({ ok, data }) => {
+                    if (!ok || !data.reply) throw new Error(data.error || 'The assistant could not respond. Try again.');
+                    this.chatMessages.push({
+                        role: 'assistant', content: data.reply, caption: data.caption || '',
+                        imagePrompt: data.image_prompt || '', imageSize: data.image_size || 'square',
+                        imageStatus: '', imageUrl: '', imageError: '',
+                    });
+                    if (data.caption) this.applyDraft(data.caption);
+                    // Re-read through the reactive array so status updates re-render.
+                    const reply = this.chatMessages[this.chatMessages.length - 1];
+                    if (reply.imagePrompt) this.runChatImage(reply);
+                })
+                .catch(err => {
+                    // Drop the unanswered message and restore it so the user can retry.
+                    this.chatMessages.pop();
+                    this.chatInput = text;
+                    this.chatError = err.message || 'The assistant could not respond. Try again.';
+                })
+                .finally(() => {
+                    this.chatSending = false;
+                    this.scrollChatToBottom();
+                });
         },
 
         debouncedPreviewUpdate() {
@@ -2886,6 +3202,8 @@ function composerApp() {
 
         _showUploadError(thumb, file) {
             const self = this;
+            // The failed thumb (with Retry) only shows in the Editor's media row.
+            this.chatError = `Couldn't upload ${file.name}. Open the Editor tab to retry or remove it.`;
             thumb.classList.add('upload-failed');
             const overlay = thumb.querySelector('.upload-overlay');
             if (overlay) overlay.remove();
@@ -3001,6 +3319,18 @@ function composerApp() {
             hidePopover();
         });
     }
+
+    // Lets the chat's best-time suggestions prefill and open the schedule view;
+    // the user still confirms with "Set Schedule".
+    window.composerOpenSchedule = function(dateVal, timeVal) {
+        [['scheduled_date', dateVal], ['scheduled_time', timeVal]].forEach(function(pair) {
+            var input = document.querySelector('input[name="' + pair[0] + '"]');
+            if (!input) return;
+            if (input._flatpickr) { input._flatpickr.setDate(pair[1], true); } else { input.value = pair[1]; }
+        });
+        showPopover();
+        showSchedule();
+    };
 
     // Close on outside click - use mousedown to avoid race with button click
     // Exclude Flatpickr calendar dropdowns (appended to <body>)

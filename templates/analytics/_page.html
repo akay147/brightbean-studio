@@ -53,6 +53,23 @@
             {% include "analytics/_hero_chart.html" %}
         </div>
 
+        {# What the AI has learned from post reviews (fed into the composer and Ideas) #}
+        {% if ai_enabled %}
+        <div class="a-card" style="padding: 18px 20px;">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px;">
+                <h3 style="font-size: 0.9375rem; font-weight: 600; color: var(--text-primary);">What AI has learned</h3>
+                <span style="font-size: 0.6875rem; color: var(--text-tertiary);">Used by the composer's Chat and Ideas on every new post</span>
+            </div>
+            {% if playbook_lessons %}
+            <ol style="margin: 0; padding-left: 20px; font-size: 0.8125rem; color: var(--text-primary); line-height: 1.7; list-style: decimal;">
+                {% for lesson in playbook_lessons %}<li>{{ lesson }}</li>{% endfor %}
+            </ol>
+            {% else %}
+            <p style="font-size: 0.8125rem; color: var(--text-secondary);">Nothing yet. Click a post below and choose <strong>Analyze with AI</strong> to find out why it performed the way it did; the lessons collect here.</p>
+            {% endif %}
+        </div>
+        {% endif %}
+
         {# All posts table #}
         <div class="a-card">
             <div style="padding: 16px 20px; border-bottom: 1px solid var(--neutral-100);">

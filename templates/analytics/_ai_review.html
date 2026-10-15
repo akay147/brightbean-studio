@@ -1,0 +1,85 @@
+{# AI post review. Rendered inside #ai-review-host in the post drawer, and returned
+   by analytics:post_ai_review to replace that host's contents. #}
+{% with r=ai_review.result %}
+<div style="display: flex; align-items: center; justify-content: space-between; margin: 22px 0 10px;">
+    <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-ghost);">AI review</div>
+    {% if ai_review %}
+    <span style="font-size: 0.6875rem; color: var(--text-tertiary);">{% if just_reviewed %}Just now{% else %}{{ ai_review.updated_at|timesince }} ago{% endif %}</span>
+    {% endif %}
+</div>
+
+{% if ai_error %}
+<p style="font-size: 0.8125rem; color: var(--danger-600, #dc2626); margin-bottom: 10px;">{{ ai_error }}</p>
+{% endif %}
+
+{% if ai_review %}
+<div style="padding: 14px; border-radius: var(--radius-lg); border: 1px solid var(--border); background: var(--surface-2, #fafaf9); margin-bottom: 14px;">
+    <span style="display: inline-block; padding: 2px 10px; border-radius: var(--radius-full); font-size: 0.6875rem; font-weight: 700;
+        {% if r.verdict == 'underperformed' %}background: #fee2e2; color: #b91c1c;
+        {% elif r.verdict == 'outperformed' %}background: #dcfce7; color: #15803d;
+        {% elif r.verdict == 'too_early' %}background: #e0e7ff; color: #4338ca;
+        {% else %}background: var(--neutral-100); color: var(--text-secondary);{% endif %}">
+        {% if r.verdict == 'underperformed' %}Underperformed{% elif r.verdict == 'outperformed' %}Outperformed{% elif r.verdict == 'too_early' %}Too early to tell{% else %}On par{% endif %}
+    </span>
+    <p style="font-size: 0.875rem; font-weight: 600; color: var(--text-primary); line-height: 1.5; margin-top: 8px;">{{ r.headline }}</p>
+</div>
+
+{% if r.reasons %}
+<div style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px;">Why it performed this way</div>
+<ul style="margin: 0 0 16px; padding-left: 18px; font-size: 0.8125rem; color: var(--text-primary); line-height: 1.6; list-style: disc;">
+    {% for reason in r.reasons %}<li>{{ reason }}</li>{% endfor %}
+</ul>
+{% endif %}
+
+<div style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px;">Similar content that performed well</div>
+{% if r.similar_content %}
+<div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px;">
+    {% for ex in r.similar_content %}
+    <a href="{{ ex.url }}" target="_blank" rel="noopener noreferrer"
+       style="display: block; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--border); text-decoration: none;">
+        <div style="font-size: 0.8125rem; font-weight: 600; color: var(--primary);">{{ ex.title }} ↗</div>
+        <div style="font-size: 0.6875rem; color: var(--text-tertiary); margin: 2px 0 4px;">{{ ex.platform }}</div>
+        <div style="font-size: 0.75rem; color: var(--text-secondary); line-height: 1.5;">{{ ex.why_it_works }}</div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<p style="font-size: 0.75rem; color: var(--text-tertiary); margin-bottom: 6px;">No verifiable examples were found this time.</p>
+{% endif %}
+<p style="font-size: 0.6875rem; color: var(--text-tertiary); line-height: 1.5; margin-bottom: 16px;">Found with web search. Instagram doesn't let apps search other accounts' posts, so these come from the public web, not Instagram's own data.</p>
+
+{% if r.improvements %}
+<div style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px;">Do this next time</div>
+<ul style="margin: 0 0 16px; padding-left: 18px; font-size: 0.8125rem; color: var(--text-primary); line-height: 1.6; list-style: disc;">
+    {% for item in r.improvements %}<li>{{ item }}</li>{% endfor %}
+</ul>
+{% endif %}
+
+{% if r.improved_caption %}
+<div style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px;">A stronger caption</div>
+<p style="font-size: 0.8125rem; color: var(--text-primary); line-height: 1.6; white-space: pre-wrap; padding: 12px; border-radius: var(--radius-md); background: var(--primary-soft); margin-bottom: 16px;">{{ r.improved_caption }}</p>
+{% endif %}
+
+{% if r.lessons %}
+<div style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px;">Saved to your AI playbook</div>
+<ul style="margin: 0 0 8px; padding-left: 18px; font-size: 0.75rem; color: var(--text-secondary); line-height: 1.6; list-style: disc;">
+    {% for lesson in r.lessons %}<li>{{ lesson }}</li>{% endfor %}
+</ul>
+<p style="font-size: 0.6875rem; color: var(--text-tertiary); margin-bottom: 14px;">The composer's chat assistant and the Ideas generator use these on every new post.</p>
+{% endif %}
+{% if playbook_error %}
+<p style="font-size: 0.75rem; color: var(--danger-600, #dc2626); margin-bottom: 10px;">{{ playbook_error }} The review was saved; analyze again later to update the playbook.</p>
+{% endif %}
+{% else %}
+<p style="font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.55; margin-bottom: 12px;">
+    Find out why this post got the engagement it did, see similar content that performed well, and get a stronger version. Lessons are saved so future posts improve.
+</p>
+{% endif %}
+
+<button type="button" class="{% if ai_review %}btn-outline{% else %}btn-brand{% endif %}" style="width: auto; padding: 8px 16px;"
+        data-action="ai-review"
+        data-url="{% url 'analytics:post_ai_review' workspace_id=workspace.id post_id=post.id %}"
+        data-csrf="{{ csrf_token }}">
+    {% if ai_review %}Analyze again{% else %}Analyze with AI{% endif %}
+</button>
+{% endwith %}

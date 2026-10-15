@@ -15,14 +15,14 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_POST
 
 from apps.composer.models import PlatformPost
 from apps.members.models import WorkspaceMembership
 from apps.social_accounts.models import AnalyticsPlatformConfig, SocialAccount
 from apps.workspaces.models import Workspace
 
-from . import services
+from . import ai_review, services
 from .metrics import PLATFORM_COLOR, PLATFORM_PRIMARY
 
 logger = logging.getLogger(__name__)
@@ -187,6 +187,8 @@ def analytics_account(request: HttpRequest, workspace_id, account_id) -> HttpRes
         "analytics_unavailable": analytics_unavailable,
         "analytics_unavailable_notice": verdict.message if verdict else "",
         "analytics_disabled_by_admin": bool(verdict and verdict.cause == services.CAUSE_DISABLED),
+        "ai_enabled": ai_review.is_enabled(),
+        "playbook_lessons": ai_review.playbook_lessons(workspace),
     }
 
     if analytics_unavailable:
@@ -272,5 +274,35 @@ def post_detail(request: HttpRequest, workspace_id, post_id) -> HttpResponse:
         social_account__workspace=workspace,
     )
     context = services.post_detail(post)
-    context.update({"workspace": workspace})
+    context.update(
+        {
+            "workspace": workspace,
+            "ai_enabled": ai_review.is_enabled(),
+            "ai_review": getattr(post, "ai_review", None),
+        }
+    )
     return render(request, "analytics/_post_detail.html", context)
+
+
+@login_required
+@require_POST
+def post_ai_review(request: HttpRequest, workspace_id, post_id) -> HttpResponse:
+    """Run (or re-run) the AI review of one published post; returns the review partial."""
+    workspace = _get_workspace(request, workspace_id)
+    post = get_object_or_404(
+        PlatformPost.objects.select_related("social_account__workspace", "post"),
+        id=post_id,
+        social_account__workspace=workspace,
+        status=PlatformPost.Status.PUBLISHED,
+    )
+    context = {"workspace": workspace, "post": post, "ai_enabled": ai_review.is_enabled()}
+    if not ai_review.is_enabled():
+        context["ai_error"] = "AI reviews are not configured. Add OPENAI_API_KEY to your environment."
+        return render(request, "analytics/_ai_review.html", context, status=503)
+    try:
+        review, playbook_error = ai_review.run_review(post)
+    except ai_review.AIReviewError as exc:
+        context.update({"ai_error": str(exc), "ai_review": getattr(post, "ai_review", None)})
+        return render(request, "analytics/_ai_review.html", context, status=502)
+    context.update({"ai_review": review, "playbook_error": playbook_error, "just_reviewed": True})
+    return render(request, "analytics/_ai_review.html", context)

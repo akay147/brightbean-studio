@@ -46,6 +46,10 @@
         </div>
         {% endfor %}
     </div>
+
+    {% if ai_enabled and post.status == "published" %}
+    <div id="ai-review-host">{% include "analytics/_ai_review.html" %}</div>
+    {% endif %}
 </div>
 
 <div style="padding: 14px 20px; border-top: 1px solid var(--neutral-100); display: flex; gap: 10px; flex-shrink: 0;">

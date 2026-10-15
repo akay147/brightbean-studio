@@ -441,7 +441,19 @@ def _is_insufficient_scope(exc: Exception) -> bool:
 
     Each provider raises slightly different exceptions; rather than wire
     them all up here, sniff the message for the common signals.
+
+    A Meta-shaped error body is classified by its code instead: Meta's
+    "object does not exist, cannot be loaded due to missing permissions, or
+    does not support this operation" (code 100) is what a deleted post
+    returns, and its wording would otherwise flag the whole account for a
+    reconnect that can never fix it.
     """
+    raw = getattr(exc, "raw_response", None)
+    error = raw.get("error") if isinstance(raw, dict) else None
+    code = error.get("code") if isinstance(error, dict) else None
+    if isinstance(code, int):
+        # 10: permission denied; 200-299: permission-specific errors.
+        return code == 10 or 200 <= code <= 299
     msg = str(exc).lower()
     return any(
         marker in msg
